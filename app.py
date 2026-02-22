@@ -86,7 +86,6 @@ def process_osh_raw(file):
 
 def process_smart_osh(file):
     file.seek(0)
-    # ננסה קודם לקרוא כקובץ מאסטר (שיש בו כותרות באנגלית)
     try:
         if file.name.endswith('.csv'):
             try: df = pd.read_csv(file, encoding='utf-8-sig')
@@ -101,7 +100,6 @@ def process_smart_osh(file):
             return df.dropna(subset=['Date'])
     except:
         pass
-    # אם זה לא קובץ מאסטר או נכשל, נקרא כקובץ בנק גולמי
     file.seek(0)
     return process_osh_raw(file)
 
@@ -157,7 +155,6 @@ tagging_file = st.sidebar.file_uploader("בחר קובץ תיוג הוצאות (
 if osh_files or ash_files:
     with st.spinner('מעבד, מאחד ומנקה נתונים...'):
         
-        # טעינת תיוגים
         category_map = {}
         if tagging_file is not None:
             try:
@@ -168,16 +165,15 @@ if osh_files or ash_files:
                     category_map = dict(zip(tags_df['הוצאה'].astype(str).str.strip(), tags_df['קטגוריה'].astype(str).str.strip()))
             except Exception as e: st.sidebar.error(f"שגיאה בקריאת קובץ התיוג: {e}")
 
-        # --- איחוד וניקוי עו"ש ---
+        # איחוד עו"ש
         osh_dfs = [process_smart_osh(f) for f in osh_files] if osh_files else []
         if osh_dfs:
             osh_df = pd.concat(osh_dfs, ignore_index=True)
-            # הסרת כפילויות
             osh_df = osh_df.drop_duplicates(subset=['Date', 'Desc', 'Income', 'Expense'], keep='last').sort_values('Date').reset_index(drop=True)
         else:
             osh_df = pd.DataFrame(columns=['Date', 'Desc', 'Income', 'Expense', 'Balance'])
 
-        # --- איחוד וניקוי אשראי ---
+        # איחוד אשראי
         ash_dfs = [process_smart_ash(f) for f in ash_files] if ash_files else []
         if ash_dfs:
             ash_df = pd.concat(ash_dfs, ignore_index=True)
@@ -185,7 +181,7 @@ if osh_files or ash_files:
         else:
             ash_df = pd.DataFrame(columns=['Date', 'Desc', 'Expense'])
         
-        # --- יצירת כפתורי הורדה למאסטרים באקסל ---
+        # כפתורי הורדה למאסטרים באקסל
         st.sidebar.markdown("---")
         st.sidebar.markdown("### 📥 הורדת מאסטר מעודכן (Excel)")
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -198,7 +194,6 @@ if osh_files or ash_files:
             excel_ash = to_excel(ash_df)
             st.sidebar.download_button(label="הורד מאסטר אשראי עדכני", data=excel_ash, file_name=f"Master_Ashray_{today_str}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        # --- המשך הלוגיקה והניתוחים ---
         cc_keywords = ["ישראכרט", "ויזה", "לאומי קארד", "מקס", "כאל", "מסטרקרד", "אמריקן אקספרס"]
         is_cc = osh_df['Desc'].str.contains('|'.join(cc_keywords), na=False) if not osh_df.empty else pd.Series(dtype=bool)
         osh_filtered = osh_df[~is_cc] if not osh_df.empty else pd.DataFrame()
@@ -267,7 +262,6 @@ if osh_files or ash_files:
             m_col2.metric("סה\"כ הוצאות", f"{exp_total:,.0f} ₪")
             m_col3.metric("נטו (חיסכון)", f"{(inc_total - exp_total):,.0f} ₪")
             
-            # --- ניתוח הכנסות ---
             st.markdown("#### 💵 ניתוח הכנסות")
             inc_col1, inc_col2 = st.columns([1, 1.5])
             if not inc_m.empty:
@@ -284,8 +278,6 @@ if osh_files or ash_files:
                 st.info("אין הכנסות לחודש זה.")
 
             st.markdown("<br>", unsafe_allow_html=True)
-            
-            # --- ניתוח הוצאות ---
             st.markdown("#### 💳 פירוט הוצאות חכם (לחץ על שורה לפירוט מלא)")
             exp_col1, exp_col2 = st.columns([1, 1.5])
             
@@ -300,7 +292,6 @@ if osh_files or ash_files:
                     pivot_m = exp_m.groupby(['Category', 'Display_Desc'])['Expense'].sum().reset_index()
                     pivot_m = pivot_m.sort_values(['Category', 'Expense'], ascending=[True, False])
                     
-                    # HTML מחרוזת מוגנת ובטוחה
                     html_table = "<div style='border: 1px solid #ddd; border-radius: 5px; background-color: white;'>"
                     html_table += "<div style='display: grid; grid-template-columns: 30px 2fr 3fr 1.5fr; padding: 12px; font-weight: bold; background-color: #f0f2f6; border-bottom: 2px solid #ddd; border-radius: 5px 5px 0 0;'>"
                     html_table += "<div></div><div>קטגוריה</div><div>בית עסק</div><div style='text-align: left;'>סה\"כ (₪)</div></div>"
@@ -329,11 +320,8 @@ if osh_files or ash_files:
                             
                     html_table += "</div>"
                     st.markdown(html_table, unsafe_allow_html=True)
-                    
-                    if exp_m['Auto_Classified'].any():
-                        st.caption("הוצאות עם ⚠️ תויגו ע\"י המערכת (לא הופיעו בקובץ התיוג שלך).")
+                    if exp_m['Auto_Classified'].any(): st.caption("הוצאות עם ⚠️ תויגו ע\"י המערכת (לא הופיעו בקובץ התיוג שלך).")
 
-                # --- טופ 10 ---
                 st.markdown("<br>", unsafe_allow_html=True)
                 top_10 = exp_m.groupby('Desc')['Expense'].sum().reset_index().sort_values('Expense', ascending=False).head(10)
                 fig_top10 = px.bar(top_10, x='Desc', y='Expense', title='10 בתי העסק היקרים ביותר בחודש זה', text_auto='.0f')
@@ -341,11 +329,9 @@ if osh_files or ash_files:
                 fig_top10.update_layout(xaxis_title="", yaxis_title="סכום (₪)")
                 st.plotly_chart(fig_top10, use_container_width=True)
                 
-                # --- הוצאות קבועות מול משתנות (בלוקים) ---
                 st.markdown("<br><hr>", unsafe_allow_html=True)
                 st.markdown("#### 🔒 ניהול תקציב: קבועות מול משתנות")
                 col_f, col_v = st.columns(2)
-                
                 with col_f:
                     st.markdown("##### הוצאות קבועות (קשיחות)")
                     fixed_df = exp_m[exp_m['Type'] == 'קבועות'].copy()
@@ -367,6 +353,46 @@ if osh_files or ash_files:
                         st.markdown(f"<div class='summary-box-var'>סה\"כ משתנות לחודש זה: {var_df['Expense'].sum():,.2f} ₪</div>", unsafe_allow_html=True)
             else:
                 st.info("אין הוצאות לחודש זה.")
+                
+            # --- מעקב היסטורי לפי קטגוריה / עסק ---
+            st.markdown("---")
+            st.header("📈 מעקב היסטורי ממוקד (לפי קטגוריה ובית עסק)")
+            st.markdown("כאן תוכל לבחור קטגוריה, ולאחר מכן בית עסק ספציפי, ולראות איך ההוצאות שלך שם התפתחו לאורך כל השנה.")
+            
+            if not all_expenses.empty:
+                cat_options = sorted(all_expenses['Category'].unique())
+                selected_cat = st.selectbox("1. בחר קטגוריה למעקב:", ["בחר קטגוריה..."] + cat_options)
+                
+                if selected_cat != "בחר קטגוריה...":
+                    cat_df = all_expenses[all_expenses['Category'] == selected_cat]
+                    biz_options = sorted(cat_df['Desc'].unique())
+                    
+                    selected_biz = st.selectbox("2. בחר בית עסק ספציפי (השאר על 'כל בתי העסק' כדי לראות את כל הקטגוריה):", ["כל בתי העסק"] + biz_options)
+                    
+                    if selected_biz != "כל בתי העסק":
+                        trend_df = cat_df[cat_df['Desc'] == selected_biz]
+                        chart_title = f"הוצאות לאורך זמן - עסק: {selected_biz} (קטגוריה: {selected_cat})"
+                    else:
+                        trend_df = cat_df
+                        chart_title = f"סך הוצאות לאורך זמן - קטגוריה: {selected_cat}"
+                        
+                    trend_summary = trend_df.groupby('Month')['Expense'].sum().reset_index()
+                    
+                    # השלמת חודשים חסרים באפסים (כדי שהגרף לא "ידלג" על חודשים שלא היית בהם בסופר למשל)
+                    all_months_df = pd.DataFrame({'Month': sorted(all_expenses['Month'].unique())})
+                    trend_summary = pd.merge(all_months_df, trend_summary, on='Month', how='left').fillna(0)
+                    
+                    fig_trend = px.bar(trend_summary, x='Month', y='Expense', title=chart_title, text_auto='.0f')
+                    fig_trend.update_traces(marker_color='#9467bd', textposition='outside')
+                    fig_trend.update_layout(xaxis_title="", yaxis_title="סכום (₪)")
+                    st.plotly_chart(fig_trend, use_container_width=True)
+                    
+                    st.markdown(f"**פירוט עסקאות מלא - {selected_biz if selected_biz != 'כל בתי העסק' else selected_cat}**")
+                    display_trend = trend_df[['Date', 'Desc', 'Expense']].copy().sort_values('Date', ascending=False)
+                    display_trend['Date'] = display_trend['Date'].dt.strftime('%d/%m/%Y')
+                    display_trend.columns = ['תאריך', 'בית עסק', 'סכום (₪)']
+                    st.dataframe(display_trend.style.format({'סכום (₪)': "{:,.2f}"}), hide_index=True, use_container_width=True, height=200)
+
         else:
             st.info("קובץ הנתונים ריק או שלא זוהו תנועות.")
 
