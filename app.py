@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import re
 from datetime import datetime
+import io
 
 # 1. הגדרות בסיס ותצוגה מימין לשמאל (RTL)
 st.set_page_config(page_title="הדאשבורד הפיננסי שלי", layout="wide", page_icon="💰")
@@ -58,8 +59,15 @@ def get_category(desc, mapping_dict):
         
     return auto_cat, True
 
-# 3. קריאת קבצים נקיים (קבצי בנק גולמיים)
+def to_excel(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Master_Data')
+    return output.getvalue()
+
+# 3. מנועי קריאה חכמים (מזהים לבד אם זה מאסטר או קובץ בנק גולמי)
 def process_osh_raw(file):
+    file.seek(0)
     try: df = pd.read_csv(file, header=None, encoding='utf-8')
     except: 
         file.seek(0)
@@ -76,7 +84,29 @@ def process_osh_raw(file):
     parsed['Balance'] = df[5].apply(clean_amount) if df.shape[1] > 5 else 0.0
     return parsed.dropna(subset=['Date'])
 
+def process_smart_osh(file):
+    file.seek(0)
+    # ננסה קודם לקרוא כקובץ מאסטר (שיש בו כותרות באנגלית)
+    try:
+        if file.name.endswith('.csv'):
+            try: df = pd.read_csv(file, encoding='utf-8-sig')
+            except: 
+                file.seek(0)
+                df = pd.read_csv(file, encoding='windows-1255')
+        else:
+            df = pd.read_excel(file)
+            
+        if all(c in df.columns for c in ['Date', 'Desc', 'Income', 'Expense']):
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            return df.dropna(subset=['Date'])
+    except:
+        pass
+    # אם זה לא קובץ מאסטר או נכשל, נקרא כקובץ בנק גולמי
+    file.seek(0)
+    return process_osh_raw(file)
+
 def process_ash_raw(file):
+    file.seek(0)
     try: df = pd.read_csv(file, header=None, encoding='utf-8')
     except: 
         file.seek(0)
@@ -94,38 +124,37 @@ def process_ash_raw(file):
     parsed['Expense'] = df[exp_col].apply(clean_amount)
     return parsed.dropna(subset=['Date'])
 
-# קריאת קבצי מאסטר קיימים
-def process_master(file):
-    try: 
-        df = pd.read_csv(file, encoding='utf-8-sig')
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        return df.dropna(subset=['Date'])
+def process_smart_ash(file):
+    file.seek(0)
+    try:
+        if file.name.endswith('.csv'):
+            try: df = pd.read_csv(file, encoding='utf-8-sig')
+            except: 
+                file.seek(0)
+                df = pd.read_csv(file, encoding='windows-1255')
+        else:
+            df = pd.read_excel(file)
+            
+        if all(c in df.columns for c in ['Date', 'Desc', 'Expense']):
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            return df.dropna(subset=['Date'])
     except:
-        st.sidebar.error("שגיאה בקריאת קובץ המאסטר.")
-        return pd.DataFrame()
+        pass
+    file.seek(0)
+    return process_ash_raw(file)
 
 # 4. ממשק המשתמש - סרגל צד וניהול מאגר נתונים
-st.sidebar.header("🗄️ ניהול מאגר נתונים")
+st.sidebar.header("🗄️ העלאת נתונים")
 
-# קבצי מאסטר (היסטוריה)
-st.sidebar.markdown("**1. טען היסטוריה קיימת (מאסטר):**")
-master_osh_file = st.sidebar.file_uploader("קובץ מאסטר - עו\"ש", type=['csv'], key="master_osh")
-master_ash_file = st.sidebar.file_uploader("קובץ מאסטר - אשראי", type=['csv'], key="master_ash")
-
-st.sidebar.markdown("---")
-
-# קבצים חדשים מהבנק
-st.sidebar.markdown("**2. הוסף קבצים חדשים מהבנק:**")
-new_osh_files = st.sidebar.file_uploader("קבצי עו\"ש חדשים", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
-new_ash_files = st.sidebar.file_uploader("קבצי כרטיס אשראי חדשים", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
+st.sidebar.markdown("**זרוק לפה את קובצי המאסטר וגם קבצים חדשים מהבנק. התוכנה תאחד הכל יחד:**")
+osh_files = st.sidebar.file_uploader("קבצי עו\"ש (אקסל/CSV)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
+ash_files = st.sidebar.file_uploader("קבצי כרטיס אשראי (אקסל/CSV)", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
 
 st.sidebar.markdown("---")
-
-st.sidebar.markdown("**3. קובץ סיווג אישי (רשות):**")
+st.sidebar.markdown("**קובץ סיווג אישי (רשות):**")
 tagging_file = st.sidebar.file_uploader("בחר קובץ תיוג הוצאות (אקסל)", type=['xlsx', 'xls', 'csv'])
 
-# אם יש מידע כלשהו לעבוד איתו (מאסטר או חדש)
-if master_osh_file or master_ash_file or new_osh_files or new_ash_files:
+if osh_files or ash_files:
     with st.spinner('מעבד, מאחד ומנקה נתונים...'):
         
         # טעינת תיוגים
@@ -140,42 +169,36 @@ if master_osh_file or master_ash_file or new_osh_files or new_ash_files:
             except Exception as e: st.sidebar.error(f"שגיאה בקריאת קובץ התיוג: {e}")
 
         # --- איחוד וניקוי עו"ש ---
-        osh_dfs = []
-        if master_osh_file: osh_dfs.append(process_master(master_osh_file))
-        if new_osh_files:
-            for f in new_osh_files: osh_dfs.append(process_osh_raw(f))
-        
+        osh_dfs = [process_smart_osh(f) for f in osh_files] if osh_files else []
         if osh_dfs:
             osh_df = pd.concat(osh_dfs, ignore_index=True)
+            # הסרת כפילויות
             osh_df = osh_df.drop_duplicates(subset=['Date', 'Desc', 'Income', 'Expense'], keep='last').sort_values('Date').reset_index(drop=True)
         else:
             osh_df = pd.DataFrame(columns=['Date', 'Desc', 'Income', 'Expense', 'Balance'])
 
         # --- איחוד וניקוי אשראי ---
-        ash_dfs = []
-        if master_ash_file: ash_dfs.append(process_master(master_ash_file))
-        if new_ash_files:
-            for f in new_ash_files: ash_dfs.append(process_ash_raw(f))
-            
+        ash_dfs = [process_smart_ash(f) for f in ash_files] if ash_files else []
         if ash_dfs:
             ash_df = pd.concat(ash_dfs, ignore_index=True)
             ash_df = ash_df.drop_duplicates(subset=['Date', 'Desc', 'Expense'], keep='last').sort_values('Date').reset_index(drop=True)
         else:
             ash_df = pd.DataFrame(columns=['Date', 'Desc', 'Expense'])
         
-        # --- יצירת כפתורי הורדה למאסטרים המעודכנים ---
+        # --- יצירת כפתורי הורדה למאסטרים באקסל ---
         st.sidebar.markdown("---")
-        st.sidebar.markdown("### 📥 הורדת מאסטר מעודכן")
+        st.sidebar.markdown("### 📥 הורדת מאסטר מעודכן (Excel)")
         today_str = datetime.now().strftime("%Y-%m-%d")
         
         if not osh_df.empty:
-            csv_osh = osh_df.to_csv(index=False).encode('utf-8-sig')
-            st.sidebar.download_button(label="הורד מאסטר עו\"ש עדכני", data=csv_osh, file_name=f"Master_Osh_{today_str}.csv", mime="text/csv")
+            excel_osh = to_excel(osh_df)
+            st.sidebar.download_button(label="הורד מאסטר עו\"ש עדכני", data=excel_osh, file_name=f"Master_Osh_{today_str}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             
         if not ash_df.empty:
-            csv_ash = ash_df.to_csv(index=False).encode('utf-8-sig')
-            st.sidebar.download_button(label="הורד מאסטר אשראי עדכני", data=csv_ash, file_name=f"Master_Ashray_{today_str}.csv", mime="text/csv")
+            excel_ash = to_excel(ash_df)
+            st.sidebar.download_button(label="הורד מאסטר אשראי עדכני", data=excel_ash, file_name=f"Master_Ashray_{today_str}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+        # --- המשך הלוגיקה והניתוחים ---
         cc_keywords = ["ישראכרט", "ויזה", "לאומי קארד", "מקס", "כאל", "מסטרקרד", "אמריקן אקספרס"]
         is_cc = osh_df['Desc'].str.contains('|'.join(cc_keywords), na=False) if not osh_df.empty else pd.Series(dtype=bool)
         osh_filtered = osh_df[~is_cc] if not osh_df.empty else pd.DataFrame()
@@ -203,8 +226,8 @@ if master_osh_file or master_ash_file or new_osh_files or new_ash_files:
         st.header("🌍 מבט על: מגמות היסטוריות")
         
         if not all_expenses.empty or not all_incomes.empty:
-            months_inc = all_incomes['Month'] if not all_incomes.empty else pd.Series()
-            months_exp = all_expenses['Month'] if not all_expenses.empty else pd.Series()
+            months_inc = all_incomes['Month'] if not all_incomes.empty else pd.Series(dtype=str)
+            months_exp = all_expenses['Month'] if not all_expenses.empty else pd.Series(dtype=str)
             all_months = pd.concat([months_inc, months_exp]).unique()
             
             monthly_summary = pd.DataFrame({'Month': all_months}).sort_values('Month')
@@ -277,6 +300,7 @@ if master_osh_file or master_ash_file or new_osh_files or new_ash_files:
                     pivot_m = exp_m.groupby(['Category', 'Display_Desc'])['Expense'].sum().reset_index()
                     pivot_m = pivot_m.sort_values(['Category', 'Expense'], ascending=[True, False])
                     
+                    # HTML מחרוזת מוגנת ובטוחה
                     html_table = "<div style='border: 1px solid #ddd; border-radius: 5px; background-color: white;'>"
                     html_table += "<div style='display: grid; grid-template-columns: 30px 2fr 3fr 1.5fr; padding: 12px; font-weight: bold; background-color: #f0f2f6; border-bottom: 2px solid #ddd; border-radius: 5px 5px 0 0;'>"
                     html_table += "<div></div><div>קטגוריה</div><div>בית עסק</div><div style='text-align: left;'>סה\"כ (₪)</div></div>"
@@ -294,14 +318,14 @@ if master_osh_file or master_ash_file or new_osh_files or new_ash_files:
                                 inner_html += f"<tr><td style='border-bottom: 1px solid #eee; padding: 6px;'>{dt_str}</td><td style='border-bottom: 1px solid #eee; padding: 6px;'>{tx['Desc']}</td><td style='text-align: left; border-bottom: 1px solid #eee; padding: 6px; direction: ltr;'>₪ {tx['Expense']:,.2f}</td></tr>"
                             inner_html += "</table>"
                             
-                            html_table += "<details style='border-bottom: 1px solid #eee;'>"
-                            html_table += "<summary style='display: grid; grid-template-columns: 30px 2fr 3fr 1.5fr; padding: 12px; cursor: pointer; transition: background-color 0.2s; list-style: none;'>"
-                            html_table += "<div style='color: #1f77b4; font-size: 0.8em; align-self: center;'>▼</div>"
+                            html_table += f"<details style='border-bottom: 1px solid #eee;'>"
+                            html_table += f"<summary style='display: grid; grid-template-columns: 30px 2fr 3fr 1.5fr; padding: 12px; cursor: pointer; transition: background-color 0.2s; list-style: none;'>"
+                            html_table += f"<div style='color: #1f77b4; font-size: 0.8em; align-self: center;'>▼</div>"
                             html_table += f"<div>{cat}</div><div style='font-weight: bold;'>{biz}</div>"
                             html_table += f"<div style='text-align: left; font-weight: bold; direction: ltr;'>₪ {amt:,.2f}</div>"
-                            html_table += "</summary>"
+                            html_table += f"</summary>"
                             html_table += f"<div style='padding: 10px 40px 10px 20px; background-color: #fafafa; border-top: 1px dashed #eee;'>{inner_html}</div>"
-                            html_table += "</details>"
+                            html_table += f"</details>"
                             
                     html_table += "</div>"
                     st.markdown(html_table, unsafe_allow_html=True)
