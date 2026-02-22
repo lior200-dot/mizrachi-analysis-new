@@ -17,16 +17,9 @@ st.markdown("""
         .summary-box-fixed { background-color: rgba(31, 119, 180, 0.1); padding: 10px; border-radius: 5px; font-weight: bold; margin-bottom: 20px; border-right: 5px solid #1f77b4; }
         .summary-box-var { background-color: rgba(255, 127, 14, 0.1); padding: 10px; border-radius: 5px; font-weight: bold; margin-bottom: 20px; border-right: 5px solid #ff7f0e; }
         
-        /* עיצוב לטבלת הפיבוט הרציפה החכמה */
-        details > summary { list-style: none; outline: none; }
+        /* העלמת החץ הדיפולטיבי של הדפדפן כדי לשים חץ מעוצב שלנו */
         details > summary::-webkit-details-marker { display: none; }
-        .pivot-row { display: flex; padding: 12px; cursor: pointer; border-bottom: 1px solid rgba(128,128,128,0.2); transition: background-color 0.2s; }
-        .pivot-row:hover { background-color: rgba(128,128,128,0.1); }
-        .pivot-header { display: flex; padding: 12px; font-weight: bold; border-bottom: 2px solid rgba(128,128,128,0.5); background-color: rgba(128,128,128,0.05); border-radius: 5px 5px 0 0; }
-        .details-container { padding: 10px 40px 15px 20px; background-color: rgba(128,128,128,0.02); border-bottom: 2px solid rgba(128,128,128,0.1); }
-        .inner-table { width: 100%; border-collapse: collapse; font-size: 0.95em; }
-        .inner-table th, .inner-table td { padding: 6px 10px; border-bottom: 1px solid rgba(128,128,128,0.15); text-align: right; }
-        .inner-table th { color: gray; font-weight: normal; }
+        details > summary { list-style: none; outline: none; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -48,18 +41,21 @@ def get_category(desc, mapping_dict):
     if desc_clean in mapping_dict:
         return mapping_dict[desc_clean], False 
     
-    desc_lower = desc_clean.lower()
+    # הוספנו רווחים סביב המחרוזת כדי לחפש מילים מדויקות ולמנוע טעויות (כמו דיס-קונט ו-יס)
+    desc_lower = " " + desc_clean.lower() + " "
     auto_cat = "כללי / אחר"
-    if any(w in desc_lower for w in ["שופרסל", "פרשמרקט", "רמי לוי", "מגה", "יינות ביתן", "ויקטורי", "אושר עד", "מחסני השוק", "חצי חינם", "וולט", "wolt", "תן ביס", "משלוחה", "מכולת", "מסעד", "קפה", "אוכל"]):
+    
+    if any(w in desc_lower for w in [" שופרסל", " פרשמרקט", " רמי לוי", " מגה ", " יינות ביתן", " ויקטורי", " אושר עד", " מחסני השוק", " חצי חינם", " וולט", " wolt", " תן ביס", " משלוחה", " מכולת", " מסעד", " קפה", " אוכל"]):
         auto_cat = "מזון ומסעדות"
-    elif any(w in desc_lower for w in ["דלק", "פז", "סונול", "דור אלון", "מיקה", "פנגו", "pango", "רב קו", "רכבת", "gett", "yango", "כביש 6", "חניה", "רכב", "תחבורה"]):
+    elif any(w in desc_lower for w in [" דלק", " פז ", " סונול", " דור אלון", " מיקה", " פנגו", " pango", " רב קו", " רכבת", " gett", " yango", " כביש 6", " חניה", " רכב", " תחבורה"]):
         auto_cat = "תחבורה ורכב"
-    elif any(w in desc_lower for w in ["הראל", "מנורה", "כללית", "מכבי", "הפניקס", "מגדל", "מאוחדת", "ביטוח", "סופר פארם", "be", "פארם"]):
+    elif any(w in desc_lower for w in [" הראל", " מנורה", " כללית", " מכבי", " הפניקס", " מגדל", " מאוחדת", " ביטוח", " סופר פארם", " be ", " פארם"]):
         auto_cat = "בריאות וביטוח"
-    elif any(w in desc_lower for w in ["פרטנר", "סלקום", "הוט", "פלאפון", "יס", "partner", "cellcom", "netflix", "spotify", "תקשורת"]):
+    elif any(w in desc_lower for w in [" פרטנר", " סלקום", " הוט ", " פלאפון", " yes ", " partner", " cellcom", " netflix", " spotify", " תקשורת"]):
         auto_cat = "תקשורת ופנאי"
-    elif any(w in desc_lower for w in ["חשמל", "מים", "ארנונה", "גז", "תאגיד", "ועד בית"]):
+    elif any(w in desc_lower for w in [" חשמל", " מים", " ארנונה", " גז", " תאגיד", " ועד בית"]):
         auto_cat = "חשבונות בית"
+        
     return auto_cat, True
 
 # 3. קריאת קבצים
@@ -214,51 +210,41 @@ if osh_file:
             fig_exp_pie.update_traces(textposition='inside', textinfo='percent+label')
             exp_col1.plotly_chart(fig_exp_pie, use_container_width=True)
             
-            # --- בניית הטבלה הרציפה באמצעות HTML/CSS ---
+            # --- בניית הטבלה הרציפה באמצעות HTML מוגן מפני Markdown ---
             with exp_col2:
                 exp_m['Display_Desc'] = exp_m.apply(lambda row: f"{row['Desc']} ⚠️" if row['Auto_Classified'] else row['Desc'], axis=1)
                 pivot_m = exp_m.groupby(['Category', 'Display_Desc'])['Expense'].sum().reset_index()
                 pivot_m = pivot_m.sort_values(['Category', 'Expense'], ascending=[True, False])
                 
-                # כותרת הטבלה
-                html_table = f"""
-                <div style="border: 1px solid rgba(128,128,128,0.2); border-radius: 5px;">
-                    <div class="pivot-header">
-                        <div style="flex: 0.5;"></div>
-                        <div style="flex: 2;">קטגוריה</div>
-                        <div style="flex: 3;">בית עסק</div>
-                        <div style="flex: 1.5; text-align: left;">סה"כ (₪)</div>
-                    </div>
-                """
+                # בניית ה-HTML בשורה אחת כדי ש-Streamlit לא יהפוך אותו לבלוק קוד בטעות
+                html_table = "<div style='border: 1px solid #ddd; border-radius: 5px; background-color: white;'>"
+                html_table += "<div style='display: grid; grid-template-columns: 30px 2fr 3fr 1.5fr; padding: 12px; font-weight: bold; background-color: #f0f2f6; border-bottom: 2px solid #ddd; border-radius: 5px 5px 0 0;'>"
+                html_table += "<div></div><div>קטגוריה</div><div>בית עסק</div><div style='text-align: left;'>סה\"כ (₪)</div></div>"
                 
-                # תוכן הטבלה
                 for cat, cat_group in pivot_m.groupby('Category', sort=False):
                     for _, row in cat_group.iterrows():
                         biz = row['Display_Desc']
                         amt = row['Expense']
-                        
-                        # שליפת פירוט העסקאות המדויק
                         raw_tx = exp_m[(exp_m['Category'] == cat) & (exp_m['Display_Desc'] == biz)].copy()
                         
                         # בניית טבלת הפירוט הפנימית
-                        inner_html = "<table class='inner-table'><tr><th>תאריך</th><th>תיאור מקורי</th><th style='text-align:left;'>סכום</th></tr>"
+                        inner_html = "<table style='width: 100%; border-collapse: collapse; font-size: 0.9em; margin-bottom: 5px;'>"
+                        inner_html += "<tr><th style='text-align: right; border-bottom: 1px solid #ddd; padding: 6px; color: #555;'>תאריך</th><th style='text-align: right; border-bottom: 1px solid #ddd; padding: 6px; color: #555;'>תיאור מקורי</th><th style='text-align: left; border-bottom: 1px solid #ddd; padding: 6px; color: #555;'>סכום</th></tr>"
                         for _, tx in raw_tx.iterrows():
                             dt_str = tx['Date'].strftime('%d/%m/%Y')
-                            inner_html += f"<tr><td>{dt_str}</td><td>{tx['Desc']}</td><td style='text-align:left;'>{tx['Expense']:,.2f} ₪</td></tr>"
+                            inner_html += f"<tr><td style='border-bottom: 1px solid #eee; padding: 6px;'>{dt_str}</td><td style='border-bottom: 1px solid #eee; padding: 6px;'>{tx['Desc']}</td><td style='text-align: left; border-bottom: 1px solid #eee; padding: 6px; direction: ltr;'>₪ {tx['Expense']:,.2f}</td></tr>"
                         inner_html += "</table>"
                         
-                        # שורת הרקורד העיקרית
-                        html_table += f"""
-                        <details>
-                            <summary class="pivot-row">
-                                <div style="flex: 0.5; color: #1f77b4;">▼</div>
-                                <div style="flex: 2;">{cat}</div>
-                                <div style="flex: 3; font-weight: bold;">{biz}</div>
-                                <div style="flex: 1.5; text-align: left; font-weight: bold;">{amt:,.2f}</div>
-                            </summary>
-                            <div class="details-container">{inner_html}</div>
-                        </details>
-                        """
+                        # הוספת השורה הראשית והפירוט (ללא ירידות שורה כדי למנוע זיהוי כקוד)
+                        html_table += f"<details style='border-bottom: 1px solid #eee;'>"
+                        html_table += f"<summary style='display: grid; grid-template-columns: 30px 2fr 3fr 1.5fr; padding: 12px; cursor: pointer; transition: background-color 0.2s; list-style: none;'>"
+                        html_table += f"<div style='color: #1f77b4; font-size: 0.8em; align-self: center;'>▼</div>"
+                        html_table += f"<div>{cat}</div><div style='font-weight: bold;'>{biz}</div>"
+                        html_table += f"<div style='text-align: left; font-weight: bold; direction: ltr;'>₪ {amt:,.2f}</div>"
+                        html_table += f"</summary>"
+                        html_table += f"<div style='padding: 10px 40px 10px 20px; background-color: #fafafa; border-top: 1px dashed #eee;'>{inner_html}</div>"
+                        html_table += f"</details>"
+                        
                 html_table += "</div>"
                 
                 # הדפסת הטבלה למסך
@@ -284,10 +270,10 @@ if osh_file:
                 st.markdown("##### הוצאות קבועות (קשיחות)")
                 fixed_df = exp_m[exp_m['Type'] == 'קבועות'].copy()
                 if not fixed_df.empty:
-                    f_display = fixed_df[['Date', 'Desc', 'Category', 'Expense']].copy()
+                    f_display = fixed_df[['Date', 'Desc', 'Category', 'Expense']].sort_values('Expense', ascending=False).copy()
                     f_display['Date'] = f_display['Date'].dt.strftime('%d/%m/%Y')
                     f_display.columns = ['תאריך', 'בית עסק', 'קטגוריה', 'סכום (₪)']
-                    st.dataframe(f_display, hide_index=True, use_container_width=True, height=250)
+                    st.dataframe(f_display.style.format({'סכום (₪)': "{:,.2f}"}), hide_index=True, use_container_width=True, height=250)
                     st.markdown(f"<div class='summary-box-fixed'>סה\"כ קבועות לחודש זה: {fixed_df['Expense'].sum():,.2f} ₪</div>", unsafe_allow_html=True)
                 else:
                     st.write("אין הוצאות קבועות לחודש זה.")
@@ -299,7 +285,7 @@ if osh_file:
                     v_display = var_df[['Date', 'Desc', 'Category', 'Expense']].sort_values('Expense', ascending=False).copy()
                     v_display['Date'] = v_display['Date'].dt.strftime('%d/%m/%Y')
                     v_display.columns = ['תאריך', 'בית עסק', 'קטגוריה', 'סכום (₪)']
-                    st.dataframe(v_display, hide_index=True, use_container_width=True, height=250)
+                    st.dataframe(v_display.style.format({'סכום (₪)': "{:,.2f}"}), hide_index=True, use_container_width=True, height=250)
                     st.markdown(f"<div class='summary-box-var'>סה\"כ משתנות לחודש זה: {var_df['Expense'].sum():,.2f} ₪</div>", unsafe_allow_html=True)
                 else:
                     st.write("אין הוצאות משתנות לחודש זה.")
