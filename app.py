@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import re
+from datetime import datetime
 
 # 1. הגדרות בסיס ותצוגה מימין לשמאל (RTL)
 st.set_page_config(page_title="הדאשבורד הפיננסי שלי", layout="wide", page_icon="💰")
@@ -41,7 +42,6 @@ def get_category(desc, mapping_dict):
     if desc_clean in mapping_dict:
         return mapping_dict[desc_clean], False 
     
-    # הוספנו רווחים סביב המחרוזת כדי לחפש מילים מדויקות ולמנוע טעויות (כמו דיס-קונט ו-יס)
     desc_lower = " " + desc_clean.lower() + " "
     auto_cat = "כללי / אחר"
     
@@ -58,8 +58,8 @@ def get_category(desc, mapping_dict):
         
     return auto_cat, True
 
-# 3. קריאת קבצים
-def process_osh(file):
+# 3. קריאת קבצים נקיים (קבצי בנק גולמיים)
+def process_osh_raw(file):
     try: df = pd.read_csv(file, header=None, encoding='utf-8')
     except: 
         file.seek(0)
@@ -76,7 +76,7 @@ def process_osh(file):
     parsed['Balance'] = df[5].apply(clean_amount) if df.shape[1] > 5 else 0.0
     return parsed.dropna(subset=['Date'])
 
-def process_ash(file):
+def process_ash_raw(file):
     try: df = pd.read_csv(file, header=None, encoding='utf-8')
     except: 
         file.seek(0)
@@ -94,17 +94,41 @@ def process_ash(file):
     parsed['Expense'] = df[exp_col].apply(clean_amount)
     return parsed.dropna(subset=['Date'])
 
-# 4. ממשק המשתמש - העלאת קבצים
-st.sidebar.header("העלאת נתונים 📂")
-st.sidebar.markdown("**חובה:**")
-osh_file = st.sidebar.file_uploader("בחר קובץ תנועות עו\"ש", type=['csv', 'xlsx', 'xls'])
-ash_files = st.sidebar.file_uploader("בחר קבצי כרטיס אשראי", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
+# קריאת קבצי מאסטר קיימים
+def process_master(file):
+    try: 
+        df = pd.read_csv(file, encoding='utf-8-sig')
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        return df.dropna(subset=['Date'])
+    except:
+        st.sidebar.error("שגיאה בקריאת קובץ המאסטר.")
+        return pd.DataFrame()
 
-st.sidebar.markdown("**רשות (מומלץ):**")
+# 4. ממשק המשתמש - סרגל צד וניהול מאגר נתונים
+st.sidebar.header("🗄️ ניהול מאגר נתונים")
+
+# קבצי מאסטר (היסטוריה)
+st.sidebar.markdown("**1. טען היסטוריה קיימת (מאסטר):**")
+master_osh_file = st.sidebar.file_uploader("קובץ מאסטר - עו\"ש", type=['csv'], key="master_osh")
+master_ash_file = st.sidebar.file_uploader("קובץ מאסטר - אשראי", type=['csv'], key="master_ash")
+
+st.sidebar.markdown("---")
+
+# קבצים חדשים מהבנק
+st.sidebar.markdown("**2. הוסף קבצים חדשים מהבנק:**")
+new_osh_files = st.sidebar.file_uploader("קבצי עו\"ש חדשים", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
+new_ash_files = st.sidebar.file_uploader("קבצי כרטיס אשראי חדשים", type=['csv', 'xlsx', 'xls'], accept_multiple_files=True)
+
+st.sidebar.markdown("---")
+
+st.sidebar.markdown("**3. קובץ סיווג אישי (רשות):**")
 tagging_file = st.sidebar.file_uploader("בחר קובץ תיוג הוצאות (אקסל)", type=['xlsx', 'xls', 'csv'])
 
-if osh_file:
-    with st.spinner('מעבד נתונים...'):
+# אם יש מידע כלשהו לעבוד איתו (מאסטר או חדש)
+if master_osh_file or master_ash_file or new_osh_files or new_ash_files:
+    with st.spinner('מעבד, מאחד ומנקה נתונים...'):
+        
+        # טעינת תיוגים
         category_map = {}
         if tagging_file is not None:
             try:
@@ -113,185 +137,167 @@ if osh_file:
                 if "הוצאה" in tags_df.columns and "קטגוריה" in tags_df.columns:
                     tags_df = tags_df.dropna(subset=['הוצאה', 'קטגוריה'])
                     category_map = dict(zip(tags_df['הוצאה'].astype(str).str.strip(), tags_df['קטגוריה'].astype(str).str.strip()))
-                    st.sidebar.success(f"נטענו {len(category_map)} תיוגים אישיים בהצלחה!")
-                else: st.sidebar.warning("קובץ התיוג חייב להכיל עמודות בשם 'הוצאה' ו-'קטגוריה'.")
             except Exception as e: st.sidebar.error(f"שגיאה בקריאת קובץ התיוג: {e}")
 
-        osh_df = process_osh(osh_file)
-        ash_dfs = [process_ash(f) for f in ash_files] if ash_files else []
-        ash_df = pd.concat(ash_dfs, ignore_index=True) if ash_dfs else pd.DataFrame(columns=['Date', 'Desc', 'Expense'])
+        # --- איחוד וניקוי עו"ש ---
+        osh_dfs = []
+        if master_osh_file: osh_dfs.append(process_master(master_osh_file))
+        if new_osh_files:
+            for f in new_osh_files: osh_dfs.append(process_osh_raw(f))
         
+        if osh_dfs:
+            osh_df = pd.concat(osh_dfs, ignore_index=True)
+            # הסרת כפילויות על בסיס תאריך, תיאור וסכומים (משאיר את העדכני ביותר)
+            osh_df = osh_df.drop_duplicates(subset=['Date', 'Desc', 'Income', 'Expense'], keep='last').sort_values('Date').reset_index(drop=True)
+        else:
+            osh_df = pd.DataFrame(columns=['Date', 'Desc', 'Income', 'Expense', 'Balance'])
+
+        # --- איחוד וניקוי אשראי ---
+        ash_dfs = []
+        if master_ash_file: ash_dfs.append(process_master(master_ash_file))
+        if new_ash_files:
+            for f in new_ash_files: ash_dfs.append(process_ash_raw(f))
+            
+        if ash_dfs:
+            ash_df = pd.concat(ash_dfs, ignore_index=True)
+            # הסרת כפילויות אשראי
+            ash_df = ash_df.drop_duplicates(subset=['Date', 'Desc', 'Expense'], keep='last').sort_values('Date').reset_index(drop=True)
+        else:
+            ash_df = pd.DataFrame(columns=['Date', 'Desc', 'Expense'])
+        
+        # --- יצירת כפתורי הורדה למאסטרים המעודכנים ---
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 📥 הורדת מאסטר מעודכן")
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        
+        if not osh_df.empty:
+            # utf-8-sig שומר על העברית באקסל של חלונות
+            csv_osh = osh_df.to_csv(index=False).encode('utf-8-sig')
+            st.sidebar.download_button(label="הורד מאסטר עו\"ש עדכני", data=csv_osh, file_name=f"Master_Osh_{today_str}.csv", mime="text/csv")
+            
+        if not ash_df.empty:
+            csv_ash = ash_df.to_csv(index=False).encode('utf-8-sig')
+            st.sidebar.download_button(label="הורד מאסטר אשראי עדכני", data=csv_ash, file_name=f"Master_Ashray_{today_str}.csv", mime="text/csv")
+
+        # --- המשך הלוגיקה והניתוחים (כמו קודם) ---
         cc_keywords = ["ישראכרט", "ויזה", "לאומי קארד", "מקס", "כאל", "מסטרקרד", "אמריקן אקספרס"]
-        is_cc = osh_df['Desc'].str.contains('|'.join(cc_keywords), na=False)
-        osh_filtered = osh_df[~is_cc]
+        is_cc = osh_df['Desc'].str.contains('|'.join(cc_keywords), na=False) if not osh_df.empty else pd.Series(dtype=bool)
+        osh_filtered = osh_df[~is_cc] if not osh_df.empty else pd.DataFrame()
         
         all_expenses = pd.concat([
-            osh_filtered[osh_filtered['Expense'] > 0][['Date', 'Desc', 'Expense']], 
-            ash_df[ash_df['Expense'] > 0]
+            osh_filtered[osh_filtered['Expense'] > 0][['Date', 'Desc', 'Expense']] if not osh_filtered.empty else pd.DataFrame(), 
+            ash_df[ash_df['Expense'] > 0] if not ash_df.empty else pd.DataFrame()
         ], ignore_index=True)
         
-        tagging_results = all_expenses['Desc'].apply(lambda x: get_category(x, category_map))
-        all_expenses['Category'] = [res[0] for res in tagging_results]
-        all_expenses['Auto_Classified'] = [res[1] for res in tagging_results]
-        all_expenses['Month'] = all_expenses['Date'].dt.to_period('M').astype(str)
+        if not all_expenses.empty:
+            tagging_results = all_expenses['Desc'].apply(lambda x: get_category(x, category_map))
+            all_expenses['Category'] = [res[0] for res in tagging_results]
+            all_expenses['Auto_Classified'] = [res[1] for res in tagging_results]
+            all_expenses['Month'] = all_expenses['Date'].dt.to_period('M').astype(str)
+            
+            fixed_cats = ["בריאות וביטוח", "תקשורת ופנאי", "חשבונות בית"]
+            all_expenses['Type'] = all_expenses['Category'].apply(lambda c: 'קבועות' if c in fixed_cats else 'משתנות')
         
-        all_incomes = osh_df[osh_df['Income'] > 0][['Date', 'Desc', 'Income']].copy()
-        all_incomes['Month'] = all_incomes['Date'].dt.to_period('M').astype(str)
-        
-        fixed_cats = ["בריאות וביטוח", "תקשורת ופנאי", "חשבונות בית"]
-        all_expenses['Type'] = all_expenses['Category'].apply(lambda c: 'קבועות' if c in fixed_cats else 'משתנות')
+        all_incomes = osh_df[osh_df['Income'] > 0][['Date', 'Desc', 'Income']].copy() if not osh_df.empty else pd.DataFrame()
+        if not all_incomes.empty:
+            all_incomes['Month'] = all_incomes['Date'].dt.to_period('M').astype(str)
 
         # --- תמונת מצב כללית ---
         st.markdown("---")
         st.header("🌍 מבט על: מגמות היסטוריות")
         
-        monthly_summary = pd.DataFrame({
-            'Month': pd.concat([all_incomes['Month'], all_expenses['Month']]).unique()
-        }).sort_values('Month')
-        monthly_summary['Income'] = monthly_summary['Month'].map(all_incomes.groupby('Month')['Income'].sum()).fillna(0)
-        monthly_summary['Expense'] = monthly_summary['Month'].map(all_expenses.groupby('Month')['Expense'].sum()).fillna(0)
-        
-        col1, col2 = st.columns(2)
-        fig_cf = go.Figure()
-        fig_cf.add_trace(go.Bar(x=monthly_summary['Month'], y=monthly_summary['Income'], name='הכנסות', marker_color='green'))
-        fig_cf.add_trace(go.Bar(x=monthly_summary['Month'], y=monthly_summary['Expense'], name='הוצאות', marker_color='red'))
-        fig_cf.update_layout(barmode='group', title="תזרים מזומנים חודשי (הכנסות מול הוצאות)", hovermode="x unified")
-        col1.plotly_chart(fig_cf, use_container_width=True)
-        
-        osh_bal = osh_df[osh_df['Balance'] != 0].sort_values('Date')
-        if not osh_bal.empty:
-            fig_bal = px.line(osh_bal, x='Date', y='Balance', title='מגמת יתרת העו"ש לאורך זמן', markers=True)
-            fig_bal.update_traces(line_color='blue')
-            col2.plotly_chart(fig_bal, use_container_width=True)
-        else:
-            cat_sum = all_expenses.groupby('Category')['Expense'].sum().reset_index()
-            fig_pie_all = px.pie(cat_sum, values='Expense', names='Category', title='התפלגות הוצאות (כל התקופה)')
-            col2.plotly_chart(fig_pie_all, use_container_width=True)
-
-        # --- חיתוך חודשי ממוקד ---
-        st.markdown("---")
-        st.header("🔎 צלילה לעומק: ניתוח חודשי ממוקד")
-        
-        selected_month = st.selectbox("📅 בחר חודש לניתוח:", reversed(monthly_summary['Month'].tolist()))
-        
-        exp_m = all_expenses[all_expenses['Month'] == selected_month].copy()
-        inc_m = all_incomes[all_incomes['Month'] == selected_month].copy()
-        
-        m_col1, m_col2, m_col3 = st.columns(3)
-        m_col1.metric("סה\"כ הכנסות", f"{inc_m['Income'].sum():,.0f} ₪")
-        m_col2.metric("סה\"כ הוצאות", f"{exp_m['Expense'].sum():,.0f} ₪")
-        m_col3.metric("נטו (חיסכון)", f"{(inc_m['Income'].sum() - exp_m['Expense'].sum()):,.0f} ₪")
-        
-        # --- ניתוח הכנסות ---
-        st.markdown("#### 💵 ניתוח הכנסות")
-        inc_col1, inc_col2 = st.columns([1, 1.5])
-        if not inc_m.empty:
-            inc_sum_m = inc_m.groupby('Desc')['Income'].sum().reset_index()
-            fig_inc_pie = px.pie(inc_sum_m, values='Income', names='Desc', title='מקורות הכנסה', hole=0.3)
-            fig_inc_pie.update_traces(textposition='inside', textinfo='percent+label')
-            inc_col1.plotly_chart(fig_inc_pie, use_container_width=True)
+        if not all_expenses.empty or not all_incomes.empty:
+            months_inc = all_incomes['Month'] if not all_incomes.empty else pd.Series()
+            months_exp = all_expenses['Month'] if not all_expenses.empty else pd.Series()
+            all_months = pd.concat([months_inc, months_exp]).unique()
             
-            inc_pivot = inc_sum_m.sort_values('Income', ascending=False)
-            inc_pivot.columns = ['מקור הכנסה', 'סה"כ (₪)']
-            inc_col2.markdown(f"**פירוט הכנסות - {selected_month}**")
-            inc_col2.dataframe(inc_pivot.style.format({'סה"כ (₪)': "{:,.2f}"}), use_container_width=True, hide_index=True)
-        else:
-            st.info("אין הכנסות לחודש זה.")
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        # --- ניתוח הוצאות ---
-        st.markdown("#### 💳 פירוט הוצאות חכם (לחץ על שורה לפירוט מלא)")
-        exp_col1, exp_col2 = st.columns([1, 1.5])
-        
-        if not exp_m.empty:
-            cat_sum_m = exp_m.groupby('Category')['Expense'].sum().reset_index()
-            fig_exp_pie = px.pie(cat_sum_m, values='Expense', names='Category', title='פילוח הוצאות לפי קטגוריות', hole=0.3)
-            fig_exp_pie.update_traces(textposition='inside', textinfo='percent+label')
-            exp_col1.plotly_chart(fig_exp_pie, use_container_width=True)
+            monthly_summary = pd.DataFrame({'Month': all_months}).sort_values('Month')
+            monthly_summary['Income'] = monthly_summary['Month'].map(all_incomes.groupby('Month')['Income'].sum() if not all_incomes.empty else {}).fillna(0)
+            monthly_summary['Expense'] = monthly_summary['Month'].map(all_expenses.groupby('Month')['Expense'].sum() if not all_expenses.empty else {}).fillna(0)
             
-            # --- בניית הטבלה הרציפה באמצעות HTML מוגן מפני Markdown ---
-            with exp_col2:
-                exp_m['Display_Desc'] = exp_m.apply(lambda row: f"{row['Desc']} ⚠️" if row['Auto_Classified'] else row['Desc'], axis=1)
-                pivot_m = exp_m.groupby(['Category', 'Display_Desc'])['Expense'].sum().reset_index()
-                pivot_m = pivot_m.sort_values(['Category', 'Expense'], ascending=[True, False])
-                
-                # בניית ה-HTML בשורה אחת כדי ש-Streamlit לא יהפוך אותו לבלוק קוד בטעות
-                html_table = "<div style='border: 1px solid #ddd; border-radius: 5px; background-color: white;'>"
-                html_table += "<div style='display: grid; grid-template-columns: 30px 2fr 3fr 1.5fr; padding: 12px; font-weight: bold; background-color: #f0f2f6; border-bottom: 2px solid #ddd; border-radius: 5px 5px 0 0;'>"
-                html_table += "<div></div><div>קטגוריה</div><div>בית עסק</div><div style='text-align: left;'>סה\"כ (₪)</div></div>"
-                
-                for cat, cat_group in pivot_m.groupby('Category', sort=False):
-                    for _, row in cat_group.iterrows():
-                        biz = row['Display_Desc']
-                        amt = row['Expense']
-                        raw_tx = exp_m[(exp_m['Category'] == cat) & (exp_m['Display_Desc'] == biz)].copy()
-                        
-                        # בניית טבלת הפירוט הפנימית
-                        inner_html = "<table style='width: 100%; border-collapse: collapse; font-size: 0.9em; margin-bottom: 5px;'>"
-                        inner_html += "<tr><th style='text-align: right; border-bottom: 1px solid #ddd; padding: 6px; color: #555;'>תאריך</th><th style='text-align: right; border-bottom: 1px solid #ddd; padding: 6px; color: #555;'>תיאור מקורי</th><th style='text-align: left; border-bottom: 1px solid #ddd; padding: 6px; color: #555;'>סכום</th></tr>"
-                        for _, tx in raw_tx.iterrows():
-                            dt_str = tx['Date'].strftime('%d/%m/%Y')
-                            inner_html += f"<tr><td style='border-bottom: 1px solid #eee; padding: 6px;'>{dt_str}</td><td style='border-bottom: 1px solid #eee; padding: 6px;'>{tx['Desc']}</td><td style='text-align: left; border-bottom: 1px solid #eee; padding: 6px; direction: ltr;'>₪ {tx['Expense']:,.2f}</td></tr>"
-                        inner_html += "</table>"
-                        
-                        # הוספת השורה הראשית והפירוט (ללא ירידות שורה כדי למנוע זיהוי כקוד)
-                        html_table += f"<details style='border-bottom: 1px solid #eee;'>"
-                        html_table += f"<summary style='display: grid; grid-template-columns: 30px 2fr 3fr 1.5fr; padding: 12px; cursor: pointer; transition: background-color 0.2s; list-style: none;'>"
-                        html_table += f"<div style='color: #1f77b4; font-size: 0.8em; align-self: center;'>▼</div>"
-                        html_table += f"<div>{cat}</div><div style='font-weight: bold;'>{biz}</div>"
-                        html_table += f"<div style='text-align: left; font-weight: bold; direction: ltr;'>₪ {amt:,.2f}</div>"
-                        html_table += f"</summary>"
-                        html_table += f"<div style='padding: 10px 40px 10px 20px; background-color: #fafafa; border-top: 1px dashed #eee;'>{inner_html}</div>"
-                        html_table += f"</details>"
-                        
-                html_table += "</div>"
-                
-                # הדפסת הטבלה למסך
-                st.markdown(html_table, unsafe_allow_html=True)
-                
-                if exp_m['Auto_Classified'].any():
-                    st.caption("הוצאות עם ⚠️ תויגו ע\"י המערכת (לא הופיעו בקובץ התיוג שלך).")
+            col1, col2 = st.columns(2)
+            fig_cf = go.Figure()
+            fig_cf.add_trace(go.Bar(x=monthly_summary['Month'], y=monthly_summary['Income'], name='הכנסות', marker_color='green'))
+            fig_cf.add_trace(go.Bar(x=monthly_summary['Month'], y=monthly_summary['Expense'], name='הוצאות', marker_color='red'))
+            fig_cf.update_layout(barmode='group', title="תזרים מזומנים חודשי (הכנסות מול הוצאות)", hovermode="x unified")
+            col1.plotly_chart(fig_cf, use_container_width=True)
+            
+            osh_bal = osh_df[osh_df['Balance'] != 0].sort_values('Date') if not osh_df.empty else pd.DataFrame()
+            if not osh_bal.empty:
+                fig_bal = px.line(osh_bal, x='Date', y='Balance', title='מגמת יתרת העו"ש לאורך זמן', markers=True)
+                fig_bal.update_traces(line_color='blue')
+                col2.plotly_chart(fig_bal, use_container_width=True)
+            elif not all_expenses.empty:
+                cat_sum = all_expenses.groupby('Category')['Expense'].sum().reset_index()
+                fig_pie_all = px.pie(cat_sum, values='Expense', names='Category', title='התפלגות הוצאות (כל התקופה)')
+                col2.plotly_chart(fig_pie_all, use_container_width=True)
 
-            # --- טופ 10 ---
+            # --- חיתוך חודשי ממוקד ---
+            st.markdown("---")
+            st.header("🔎 צלילה לעומק: ניתוח חודשי ממוקד")
+            
+            selected_month = st.selectbox("📅 בחר חודש לניתוח:", reversed(monthly_summary['Month'].tolist()))
+            
+            exp_m = all_expenses[all_expenses['Month'] == selected_month].copy() if not all_expenses.empty else pd.DataFrame()
+            inc_m = all_incomes[all_incomes['Month'] == selected_month].copy() if not all_incomes.empty else pd.DataFrame()
+            
+            m_col1, m_col2, m_col3 = st.columns(3)
+            inc_total = inc_m['Income'].sum() if not inc_m.empty else 0
+            exp_total = exp_m['Expense'].sum() if not exp_m.empty else 0
+            m_col1.metric("סה\"כ הכנסות", f"{inc_total:,.0f} ₪")
+            m_col2.metric("סה\"כ הוצאות", f"{exp_total:,.0f} ₪")
+            m_col3.metric("נטו (חיסכון)", f"{(inc_total - exp_total):,.0f} ₪")
+            
+            # --- ניתוח הכנסות ---
+            st.markdown("#### 💵 ניתוח הכנסות")
+            inc_col1, inc_col2 = st.columns([1, 1.5])
+            if not inc_m.empty:
+                inc_sum_m = inc_m.groupby('Desc')['Income'].sum().reset_index()
+                fig_inc_pie = px.pie(inc_sum_m, values='Income', names='Desc', title='מקורות הכנסה', hole=0.3)
+                fig_inc_pie.update_traces(textposition='inside', textinfo='percent+label')
+                inc_col1.plotly_chart(fig_inc_pie, use_container_width=True)
+                
+                inc_pivot = inc_sum_m.sort_values('Income', ascending=False)
+                inc_pivot.columns = ['מקור הכנסה', 'סה"כ (₪)']
+                inc_col2.markdown(f"**פירוט הכנסות - {selected_month}**")
+                inc_col2.dataframe(inc_pivot.style.format({'סה"כ (₪)': "{:,.2f}"}), use_container_width=True, hide_index=True)
+            else:
+                st.info("אין הכנסות לחודש זה.")
+
             st.markdown("<br>", unsafe_allow_html=True)
-            top_10 = exp_m.groupby('Desc')['Expense'].sum().reset_index().sort_values('Expense', ascending=False).head(10)
-            fig_top10 = px.bar(top_10, x='Desc', y='Expense', title='10 בתי העסק היקרים ביותר בחודש זה', text_auto='.0f')
-            fig_top10.update_traces(marker_color='indianred', textposition='outside')
-            fig_top10.update_layout(xaxis_title="", yaxis_title="סכום (₪)")
-            st.plotly_chart(fig_top10, use_container_width=True)
             
-            # --- הוצאות קבועות מול משתנות (בלוקים) ---
-            st.markdown("<br><hr>", unsafe_allow_html=True)
-            st.markdown("#### 🔒 ניהול תקציב: קבועות מול משתנות")
-            col_f, col_v = st.columns(2)
+            # --- ניתוח הוצאות ---
+            st.markdown("#### 💳 פירוט הוצאות חכם (לחץ על שורה לפירוט מלא)")
+            exp_col1, exp_col2 = st.columns([1, 1.5])
             
-            with col_f:
-                st.markdown("##### הוצאות קבועות (קשיחות)")
-                fixed_df = exp_m[exp_m['Type'] == 'קבועות'].copy()
-                if not fixed_df.empty:
-                    f_display = fixed_df[['Date', 'Desc', 'Category', 'Expense']].sort_values('Expense', ascending=False).copy()
-                    f_display['Date'] = f_display['Date'].dt.strftime('%d/%m/%Y')
-                    f_display.columns = ['תאריך', 'בית עסק', 'קטגוריה', 'סכום (₪)']
-                    st.dataframe(f_display.style.format({'סכום (₪)': "{:,.2f}"}), hide_index=True, use_container_width=True, height=250)
-                    st.markdown(f"<div class='summary-box-fixed'>סה\"כ קבועות לחודש זה: {fixed_df['Expense'].sum():,.2f} ₪</div>", unsafe_allow_html=True)
-                else:
-                    st.write("אין הוצאות קבועות לחודש זה.")
+            if not exp_m.empty:
+                cat_sum_m = exp_m.groupby('Category')['Expense'].sum().reset_index()
+                fig_exp_pie = px.pie(cat_sum_m, values='Expense', names='Category', title='פילוח הוצאות לפי קטגוריות', hole=0.3)
+                fig_exp_pie.update_traces(textposition='inside', textinfo='percent+label')
+                exp_col1.plotly_chart(fig_exp_pie, use_container_width=True)
+                
+                with exp_col2:
+                    exp_m['Display_Desc'] = exp_m.apply(lambda row: f"{row['Desc']} ⚠️" if row['Auto_Classified'] else row['Desc'], axis=1)
+                    pivot_m = exp_m.groupby(['Category', 'Display_Desc'])['Expense'].sum().reset_index()
+                    pivot_m = pivot_m.sort_values(['Category', 'Expense'], ascending=[True, False])
                     
-            with col_v:
-                st.markdown("##### הוצאות משתנות (בשליטתך)")
-                var_df = exp_m[exp_m['Type'] == 'משתנות'].copy()
-                if not var_df.empty:
-                    v_display = var_df[['Date', 'Desc', 'Category', 'Expense']].sort_values('Expense', ascending=False).copy()
-                    v_display['Date'] = v_display['Date'].dt.strftime('%d/%m/%Y')
-                    v_display.columns = ['תאריך', 'בית עסק', 'קטגוריה', 'סכום (₪)']
-                    st.dataframe(v_display.style.format({'סכום (₪)': "{:,.2f}"}), hide_index=True, use_container_width=True, height=250)
-                    st.markdown(f"<div class='summary-box-var'>סה\"כ משתנות לחודש זה: {var_df['Expense'].sum():,.2f} ₪</div>", unsafe_allow_html=True)
-                else:
-                    st.write("אין הוצאות משתנות לחודש זה.")
-
-        else:
-            st.info("אין הוצאות לחודש זה.")
-
-else:
-    st.info("👈 כדי להתחיל, העלה את קבצי הבנק שלך בסרגל הצד.")
+                    html_table = "<div style='border: 1px solid #ddd; border-radius: 5px; background-color: white;'>"
+                    html_table += "<div style='display: grid; grid-template-columns: 30px 2fr 3fr 1.5fr; padding: 12px; font-weight: bold; background-color: #f0f2f6; border-bottom: 2px solid #ddd; border-radius: 5px 5px 0 0;'>"
+                    html_table += "<div></div><div>קטגוריה</div><div>בית עסק</div><div style='text-align: left;'>סה\"כ (₪)</div></div>"
+                    
+                    for cat, cat_group in pivot_m.groupby('Category', sort=False):
+                        for _, row in cat_group.iterrows():
+                            biz = row['Display_Desc']
+                            amt = row['Expense']
+                            raw_tx = exp_m[(exp_m['Category'] == cat) & (exp_m['Display_Desc'] == biz)].copy()
+                            
+                            inner_html = "<table style='width: 100%; border-collapse: collapse; font-size: 0.9em; margin-bottom: 5px;'>"
+                            inner_html += "<tr><th style='text-align: right; border-bottom: 1px solid #ddd; padding: 6px; color: #555;'>תאריך</th><th style='text-align: right; border-bottom: 1px solid #ddd; padding: 6px; color: #555;'>תיאור מקורי</th><th style='text-align: left; border-bottom: 1px solid #ddd; padding: 6px; color: #555;'>סכום</th></tr>"
+                            for _, tx in raw_tx.iterrows():
+                                dt_str = tx['Date'].strftime('%d/%m/%Y')
+                                inner_html += f"<tr><td style='border-bottom: 1px solid #eee; padding: 6px;'>{dt_str}</td><td style='border-bottom: 1px solid #eee; padding: 6px;'>{tx['Desc']}</td><td style='text-align: left; border-bottom: 1px solid #eee; padding: 6px; direction: ltr;'>₪ {tx['Expense']:,.2f}</td></tr>"
+                            inner_html += "</table>"
+                            
+                            html_table += f"<details style='border-bottom: 1px solid #eee;'>"
+                            html_table += f"<summary style='display: grid; grid-template-columns: 30px 2fr 3fr 1.5fr; padding: 12px; cursor: pointer; transition: background-color 0.2s; list-style: none;'>"
+                            html_table += f"<div style='color: #1f77b4; font-size: 0
