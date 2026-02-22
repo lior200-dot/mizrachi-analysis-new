@@ -147,7 +147,6 @@ if master_osh_file or master_ash_file or new_osh_files or new_ash_files:
         
         if osh_dfs:
             osh_df = pd.concat(osh_dfs, ignore_index=True)
-            # הסרת כפילויות על בסיס תאריך, תיאור וסכומים (משאיר את העדכני ביותר)
             osh_df = osh_df.drop_duplicates(subset=['Date', 'Desc', 'Income', 'Expense'], keep='last').sort_values('Date').reset_index(drop=True)
         else:
             osh_df = pd.DataFrame(columns=['Date', 'Desc', 'Income', 'Expense', 'Balance'])
@@ -160,7 +159,6 @@ if master_osh_file or master_ash_file or new_osh_files or new_ash_files:
             
         if ash_dfs:
             ash_df = pd.concat(ash_dfs, ignore_index=True)
-            # הסרת כפילויות אשראי
             ash_df = ash_df.drop_duplicates(subset=['Date', 'Desc', 'Expense'], keep='last').sort_values('Date').reset_index(drop=True)
         else:
             ash_df = pd.DataFrame(columns=['Date', 'Desc', 'Expense'])
@@ -171,7 +169,6 @@ if master_osh_file or master_ash_file or new_osh_files or new_ash_files:
         today_str = datetime.now().strftime("%Y-%m-%d")
         
         if not osh_df.empty:
-            # utf-8-sig שומר על העברית באקסל של חלונות
             csv_osh = osh_df.to_csv(index=False).encode('utf-8-sig')
             st.sidebar.download_button(label="הורד מאסטר עו\"ש עדכני", data=csv_osh, file_name=f"Master_Osh_{today_str}.csv", mime="text/csv")
             
@@ -179,7 +176,6 @@ if master_osh_file or master_ash_file or new_osh_files or new_ash_files:
             csv_ash = ash_df.to_csv(index=False).encode('utf-8-sig')
             st.sidebar.download_button(label="הורד מאסטר אשראי עדכני", data=csv_ash, file_name=f"Master_Ashray_{today_str}.csv", mime="text/csv")
 
-        # --- המשך הלוגיקה והניתוחים (כמו קודם) ---
         cc_keywords = ["ישראכרט", "ויזה", "לאומי קארד", "מקס", "כאל", "מסטרקרד", "אמריקן אקספרס"]
         is_cc = osh_df['Desc'].str.contains('|'.join(cc_keywords), na=False) if not osh_df.empty else pd.Series(dtype=bool)
         osh_filtered = osh_df[~is_cc] if not osh_df.empty else pd.DataFrame()
@@ -298,6 +294,57 @@ if master_osh_file or master_ash_file or new_osh_files or new_ash_files:
                                 inner_html += f"<tr><td style='border-bottom: 1px solid #eee; padding: 6px;'>{dt_str}</td><td style='border-bottom: 1px solid #eee; padding: 6px;'>{tx['Desc']}</td><td style='text-align: left; border-bottom: 1px solid #eee; padding: 6px; direction: ltr;'>₪ {tx['Expense']:,.2f}</td></tr>"
                             inner_html += "</table>"
                             
-                            html_table += f"<details style='border-bottom: 1px solid #eee;'>"
-                            html_table += f"<summary style='display: grid; grid-template-columns: 30px 2fr 3fr 1.5fr; padding: 12px; cursor: pointer; transition: background-color 0.2s; list-style: none;'>"
-                            html_table += f"<div style='color: #1f77b4; font-size: 0
+                            html_table += "<details style='border-bottom: 1px solid #eee;'>"
+                            html_table += "<summary style='display: grid; grid-template-columns: 30px 2fr 3fr 1.5fr; padding: 12px; cursor: pointer; transition: background-color 0.2s; list-style: none;'>"
+                            html_table += "<div style='color: #1f77b4; font-size: 0.8em; align-self: center;'>▼</div>"
+                            html_table += f"<div>{cat}</div><div style='font-weight: bold;'>{biz}</div>"
+                            html_table += f"<div style='text-align: left; font-weight: bold; direction: ltr;'>₪ {amt:,.2f}</div>"
+                            html_table += "</summary>"
+                            html_table += f"<div style='padding: 10px 40px 10px 20px; background-color: #fafafa; border-top: 1px dashed #eee;'>{inner_html}</div>"
+                            html_table += "</details>"
+                            
+                    html_table += "</div>"
+                    st.markdown(html_table, unsafe_allow_html=True)
+                    
+                    if exp_m['Auto_Classified'].any():
+                        st.caption("הוצאות עם ⚠️ תויגו ע\"י המערכת (לא הופיעו בקובץ התיוג שלך).")
+
+                # --- טופ 10 ---
+                st.markdown("<br>", unsafe_allow_html=True)
+                top_10 = exp_m.groupby('Desc')['Expense'].sum().reset_index().sort_values('Expense', ascending=False).head(10)
+                fig_top10 = px.bar(top_10, x='Desc', y='Expense', title='10 בתי העסק היקרים ביותר בחודש זה', text_auto='.0f')
+                fig_top10.update_traces(marker_color='indianred', textposition='outside')
+                fig_top10.update_layout(xaxis_title="", yaxis_title="סכום (₪)")
+                st.plotly_chart(fig_top10, use_container_width=True)
+                
+                # --- הוצאות קבועות מול משתנות (בלוקים) ---
+                st.markdown("<br><hr>", unsafe_allow_html=True)
+                st.markdown("#### 🔒 ניהול תקציב: קבועות מול משתנות")
+                col_f, col_v = st.columns(2)
+                
+                with col_f:
+                    st.markdown("##### הוצאות קבועות (קשיחות)")
+                    fixed_df = exp_m[exp_m['Type'] == 'קבועות'].copy()
+                    if not fixed_df.empty:
+                        f_display = fixed_df[['Date', 'Desc', 'Category', 'Expense']].sort_values('Expense', ascending=False).copy()
+                        f_display['Date'] = f_display['Date'].dt.strftime('%d/%m/%Y')
+                        f_display.columns = ['תאריך', 'בית עסק', 'קטגוריה', 'סכום (₪)']
+                        st.dataframe(f_display.style.format({'סכום (₪)': "{:,.2f}"}), hide_index=True, use_container_width=True, height=250)
+                        st.markdown(f"<div class='summary-box-fixed'>סה\"כ קבועות לחודש זה: {fixed_df['Expense'].sum():,.2f} ₪</div>", unsafe_allow_html=True)
+                        
+                with col_v:
+                    st.markdown("##### הוצאות משתנות (בשליטתך)")
+                    var_df = exp_m[exp_m['Type'] == 'משתנות'].copy()
+                    if not var_df.empty:
+                        v_display = var_df[['Date', 'Desc', 'Category', 'Expense']].sort_values('Expense', ascending=False).copy()
+                        v_display['Date'] = v_display['Date'].dt.strftime('%d/%m/%Y')
+                        v_display.columns = ['תאריך', 'בית עסק', 'קטגוריה', 'סכום (₪)']
+                        st.dataframe(v_display.style.format({'סכום (₪)': "{:,.2f}"}), hide_index=True, use_container_width=True, height=250)
+                        st.markdown(f"<div class='summary-box-var'>סה\"כ משתנות לחודש זה: {var_df['Expense'].sum():,.2f} ₪</div>", unsafe_allow_html=True)
+            else:
+                st.info("אין הוצאות לחודש זה.")
+        else:
+            st.info("קובץ הנתונים ריק או שלא זוהו תנועות.")
+
+else:
+    st.info("👈 כדי להתחיל, העלה קובץ מאסטר היסטורי או קבצי בנק חדשים בסרגל הצד.")
