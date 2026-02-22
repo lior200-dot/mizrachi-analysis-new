@@ -233,7 +233,11 @@ if osh_files or ash_files:
             fig_cf = go.Figure()
             fig_cf.add_trace(go.Bar(x=monthly_summary['Month'], y=monthly_summary['Income'], name='הכנסות', marker_color='green'))
             fig_cf.add_trace(go.Bar(x=monthly_summary['Month'], y=monthly_summary['Expense'], name='הוצאות', marker_color='red'))
-            fig_cf.update_layout(barmode='group', title="תזרים מזומנים חודשי (הכנסות מול הוצאות)", hovermode="x unified")
+            
+            # וידוא שהמספרים והחודשים ורטיקליים ולא חתוכים גם כאן
+            max_cf = max(monthly_summary['Income'].max(), monthly_summary['Expense'].max()) if not monthly_summary.empty else 100
+            fig_cf.update_layout(barmode='group', title="תזרים מזומנים חודשי (הכנסות מול הוצאות)", hovermode="x unified",
+                                 xaxis_tickangle=-90, yaxis_range=[0, max_cf * 1.2])
             col1.plotly_chart(fig_cf, use_container_width=True)
             
             osh_bal = osh_df[osh_df['Balance'] != 0].sort_values('Date') if not osh_df.empty else pd.DataFrame()
@@ -322,13 +326,22 @@ if osh_files or ash_files:
                     st.markdown(html_table, unsafe_allow_html=True)
                     if exp_m['Auto_Classified'].any(): st.caption("הוצאות עם ⚠️ תויגו ע\"י המערכת (לא הופיעו בקובץ התיוג שלך).")
 
+                # --- טופ 10 עם שדרוג למרווח מעל העמודות וטקסט ורטיקלי ---
                 st.markdown("<br>", unsafe_allow_html=True)
                 top_10 = exp_m.groupby('Desc')['Expense'].sum().reset_index().sort_values('Expense', ascending=False).head(10)
                 fig_top10 = px.bar(top_10, x='Desc', y='Expense', title='10 בתי העסק היקרים ביותר בחודש זה', text_auto='.0f')
                 fig_top10.update_traces(marker_color='indianred', textposition='outside')
-                fig_top10.update_layout(xaxis_title="", yaxis_title="סכום (₪)")
+                
+                max_top10 = top_10['Expense'].max() if not top_10.empty else 100
+                fig_top10.update_layout(
+                    xaxis_title="", 
+                    yaxis_title="סכום (₪)",
+                    xaxis_tickangle=-90, # טקסט ורטיקלי לציר ה-X
+                    yaxis_range=[0, max_top10 * 1.2] # תוספת 20% אוויר למעלה כדי למנוע חיתוך
+                )
                 st.plotly_chart(fig_top10, use_container_width=True)
                 
+                # --- הוצאות קבועות מול משתנות (בלוקים) ---
                 st.markdown("<br><hr>", unsafe_allow_html=True)
                 st.markdown("#### 🔒 ניהול תקציב: קבועות מול משתנות")
                 col_f, col_v = st.columns(2)
@@ -378,13 +391,20 @@ if osh_files or ash_files:
                         
                     trend_summary = trend_df.groupby('Month')['Expense'].sum().reset_index()
                     
-                    # השלמת חודשים חסרים באפסים (כדי שהגרף לא "ידלג" על חודשים שלא היית בהם בסופר למשל)
                     all_months_df = pd.DataFrame({'Month': sorted(all_expenses['Month'].unique())})
                     trend_summary = pd.merge(all_months_df, trend_summary, on='Month', how='left').fillna(0)
                     
                     fig_trend = px.bar(trend_summary, x='Month', y='Expense', title=chart_title, text_auto='.0f')
                     fig_trend.update_traces(marker_color='#9467bd', textposition='outside')
-                    fig_trend.update_layout(xaxis_title="", yaxis_title="סכום (₪)")
+                    
+                    # הוספת מרווח אוויר (20%) מעל העמודה הגבוהה ביותר וסיבוב טקסט של החודשים לורטיקלי
+                    max_trend = trend_summary['Expense'].max() if not trend_summary.empty else 100
+                    fig_trend.update_layout(
+                        xaxis_title="", 
+                        yaxis_title="סכום (₪)",
+                        xaxis_tickangle=-90,  # הטקסט של החודשים יהיה ורטיקלי כדי שלא יעלה אחד על השני
+                        yaxis_range=[0, max_trend * 1.2] # אוויר למעלה
+                    )
                     st.plotly_chart(fig_trend, use_container_width=True)
                     
                     st.markdown(f"**פירוט עסקאות מלא - {selected_biz if selected_biz != 'כל בתי העסק' else selected_cat}**")
